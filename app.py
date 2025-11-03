@@ -5,11 +5,11 @@ from rapidfuzz import fuzz
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 import gradio as gr
 import uvicorn
 
-# ------------------ constants ------------------
+# ---------- constants ----------
 
 SUFFIXES = {
     "ltd","limited","co","company","corp","corporation","inc","incorporated",
@@ -34,7 +34,7 @@ COUNTRY_EQUIVALENTS = {
 
 THRESHOLD = 70
 
-# ------------------ helpers ------------------
+# ---------- helpers ----------
 
 def _normalize_tokens(text: str) -> str:
     if not isinstance(text, str):
@@ -66,24 +66,27 @@ def compare_company_domain(company: str, domain: str):
         return "Unsure – Please Check", 0, "missing input"
 
     c = _normalize_tokens(company)
-    d_raw = domain.lower().strip()
+    d_raw = (domain or "").lower().strip()
     d = _clean_domain(d_raw)
 
-    if d in c.replace(" ", "") or c.replace(" ", "") in d:
+    # direct / compact containment
+    if d and (d in c.replace(" ", "") or c.replace(" ", "") in d):
         return "Likely Match", 100, "direct containment"
 
-    if any(word in c for word in d.split()) or any(word in d for word in c.split()):
+    # token containment + partial fuzz
+    if d and (any(word in c for word in d.split()) or any(word in d for word in c.split())):
         score = fuzz.partial_ratio(c, d)
         if score >= 70:
             return "Likely Match", score, "token containment"
 
+    # brand-y suffixes boost
     BRAND_TERMS = {"tx","bio","pharma","therapeutics","labs","health","med","rx","group","holdings"}
-    if any(t in c.split() for t in BRAND_TERMS) and any(t in d for t in BRAND_TERMS):
+    if d and any(t in c.split() for t in BRAND_TERMS) and any(t in d for t in BRAND_TERMS):
         if fuzz.partial_ratio(c, d) >= 70:
             return "Likely Match", 90, "brand suffix match"
 
-    score_full = fuzz.token_sort_ratio(c, d)
-    score_partial = fuzz.partial_ratio(c, d)
+    score_full = fuzz.token_sort_ratio(c, d) if d else 0
+    score_partial = fuzz.partial_ratio(c, d) if d else 0
     score = max(score_full, score_partial)
 
     if score >= 85:
@@ -93,7 +96,7 @@ def compare_company_domain(company: str, domain: str):
     else:
         return "Likely NOT Match", score, "low similarity"
 
-# ------------------ main matching function ------------------
+# ---------- main matching ----------
 
 def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr.Progress(track_tqdm=True)):
     try:
@@ -120,13 +123,15 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
                 matches, new_vals = [], []
                 for i, val in enumerate(df_master[master_col].fillna("").astype(str)):
                     val_norm = val.strip().lower()
-                    val_norm_eq = COUNTRY_EQUIVALENTS.get(val_norm, val_norm) if master_col.lower() in ["lead_country","country","c_country"] else val_norm
-                    if val_norm_eq in pick_map:
+                    # normalize countries where appropriate
+                    if master_col.lower() in ["lead_country","country","c_country"]:
+                        val_norm = COUNTRY_EQUIVALENTS.get(val_norm, val_norm)
+                    if val_norm in pick_map:
                         matches.append("Yes")
-                        new_val = pick_map[val_norm_eq]
+                        new_val = pick_map[val_norm]
                         new_vals.append(new_val)
                         if new_val != val:
-                            corrected_cells.add((master_col, i + 2))
+                            corrected_cells.add((master_col, i + 2))  # +2 for header + 1-indexing
                     else:
                         matches.append("No")
                         new_vals.append(val)
@@ -135,7 +140,7 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
             else:
                 df_out[out_col] = "Column Missing"
 
-        # dynamic question columns
+        # dynamic question columns (Q1, q01, Question 3, etc.)
         q_cols = [c for c in df_picklist.columns if re.match(r"(?i)q0*\d+|question\s*\d+", c)]
         for qc in q_cols:
             out_col = f"Match_{qc}"
@@ -156,15 +161,23 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
 
         # seniority parsing
         def parse_seniority(title):
-            if not isinstance(title, str): return "Entry", "no title"
+            if not isinstance(title, str): 
+                return "Entry", "no title"
             t = title.lower().strip()
-            if re.search(r"\bchief\b|\bcio\b|\bcto\b|\bceo\b|\bcfo\b|\bciso\b|\bcpo\b|\bcso\b|\bcoo\b|\bchro\b|\bpresident\b", t): return "C Suite", "c-level"
-            if re.search(r"\bvice president\b|\bvp\b|\bsvp\b", t): return "VP", "vp"
-            if re.search(r"\bhead\b", t): return "Head", "head"
-            if re.search(r"\bdirector\b", t): return "Director", "director"
-            if re.search(r"\bmanager\b|\bmgr\b", t): return "Manager", "manager"
-            if re.search(r"\bsenior\b|\bsr\b|\blead\b|\bprincipal\b", t): return "Senior", "senior"
-            if re.search(r"\bintern\b|\btrainee\b|\bassistant\b|\bgraduate\b", t): return "Entry", "entry"
+            if re.search(r"\bchief\b|\bcio\b|\bcto\b|\bceo\b|\bcfo\b|\bciso\b|\bcpo\b|\bcso\b|\bcoo\b|\bchro\b|\bpresident\b", t): 
+                return "C Suite", "c-level"
+            if re.search(r"\bvice president\b|\bvp\b|\bsvp\b", t): 
+                return "VP", "vp"
+            if re.search(r"\bhead\b", t): 
+                return "Head", "head"
+            if re.search(r"\bdirector\b", t): 
+                return "Director", "director"
+            if re.search(r"\bmanager\b|\bmgr\b", t): 
+                return "Manager", "manager"
+            if re.search(r"\bsenior\b|\bsr\b|\blead\b|\bprincipal\b", t): 
+                return "Senior", "senior"
+            if re.search(r"\bintern\b|\btrainee\b|\bassistant\b|\bgraduate\b", t): 
+                return "Entry", "entry"
             return "Entry", "none"
 
         if "jobtitle" in df_master.columns:
@@ -194,7 +207,7 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
                     dom = df_master.at[i, domain_col]
                 elif email_col and pd.notna(df_master.at[i, email_col]):
                     dom = _extract_domain_from_email(df_master.at[i, email_col])
-                status, score, reason = compare_company_domain(comp, dom)
+                status, score, reason = compare_company_domain(comp, dom or "")
                 statuses.append(status)
                 scores.append(score)
                 reasons.append(reason)
@@ -211,7 +224,6 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
         progress(0.9, desc="💾 Saving results...")
         out_file = f"{os.path.splitext(master_file.name)[0]} - Full_Check_Results.xlsx"
         df_out.to_excel(out_file, index=False)
-        from openpyxl import load_workbook
         wb = load_workbook(out_file)
         ws = wb.active
         yellow = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
@@ -243,7 +255,7 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
-# ------------------ Gradio UI ------------------
+# ---------- Gradio UI ----------
 
 demo = gr.Interface(
     fn=run_matching,
@@ -257,21 +269,16 @@ demo = gr.Interface(
     description="Upload MASTER & PICKLIST Excel files to auto-match, validate domains, map questions, and optionally highlight changed values.",
 )
 
-# ------------------ FastAPI wrapper ------------------
+# ---------- FastAPI wrapper ----------
 
 app = FastAPI()
 
 @app.get("/healthz")
-def healthz():
+def health():
     return JSONResponse({"status": "ok"})
 
-@app.get("/")
-def root():
-    # redirect root to the Gradio UI
-    return RedirectResponse(url="/ui")
-
-# mount Gradio at /ui to avoid clashing with "/"
-app = gr.mount_gradio_app(app, demo, path="/ui")
+# Mount the Gradio app at the root ("/")
+app = gr.mount_gradio_app(app, demo, path="/")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "7860"))
