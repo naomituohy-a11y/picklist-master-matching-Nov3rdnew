@@ -9,8 +9,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 import gradio as gr
 import uvicorn
 
-# ------------------ constants ------------------
-
+# ---------- constants ----------
 SUFFIXES = {
     "ltd","limited","co","company","corp","corporation","inc","incorporated",
     "plc","public","llc","lp","llp","ulc","pc","pllc","sa","ag","nv","se","bv",
@@ -34,8 +33,7 @@ COUNTRY_EQUIVALENTS = {
 
 THRESHOLD = 70
 
-# ------------------ helpers ------------------
-
+# ---------- helpers ----------
 def _normalize_tokens(text: str) -> str:
     if not isinstance(text, str):
         return ""
@@ -93,13 +91,12 @@ def compare_company_domain(company: str, domain: str):
     else:
         return "Likely NOT Match", score, "low similarity"
 
-# ------------------ main matching ------------------
-
-def run_matching(master_file: str, picklist_file: str, highlight_changes=True, progress=gr.Progress(track_tqdm=True)):
+# ---------- main function ----------
+def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr.Progress(track_tqdm=True)):
     try:
         progress(0, desc="📂 Reading uploaded files...")
-        df_master = pd.read_excel(master_file)
-        df_picklist = pd.read_excel(picklist_file)
+        df_master = pd.read_excel(master_file.name)
+        df_picklist = pd.read_excel(picklist_file.name)
 
         progress(0.2, desc="🔧 Preparing data...")
         EXACT_PAIRS = [
@@ -120,11 +117,10 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
                 matches, new_vals = [], []
                 for i, val in enumerate(df_master[master_col].fillna("").astype(str)):
                     val_norm = val.strip().lower()
-                    if master_col.lower() in ["lead_country","country","c_country"]:
-                        val_norm = COUNTRY_EQUIVALENTS.get(val_norm, val_norm)
-                    if val_norm in pick_map:
+                    val_norm_eq = COUNTRY_EQUIVALENTS.get(val_norm, val_norm) if master_col.lower() in ["lead_country","country","c_country"] else val_norm
+                    if val_norm_eq in pick_map:
                         matches.append("Yes")
-                        new_val = pick_map[val_norm]
+                        new_val = pick_map[val_norm_eq]
                         new_vals.append(new_val)
                         if new_val != val:
                             corrected_cells.add((master_col, i + 2))
@@ -136,7 +132,7 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
             else:
                 df_out[out_col] = "Column Missing"
 
-        # Dynamic question columns
+        # dynamic Q columns
         q_cols = [c for c in df_picklist.columns if re.match(r"(?i)q0*\d+|question\s*\d+", c)]
         for qc in q_cols:
             out_col = f"Match_{qc}"
@@ -155,10 +151,9 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
             else:
                 df_out[out_col] = "Column Missing"
 
-        # Seniority parsing
+        # seniority parsing
         def parse_seniority(title):
-            if not isinstance(title, str): 
-                return "Entry", "no title"
+            if not isinstance(title, str): return "Entry", "no title"
             t = title.lower().strip()
             if re.search(r"\bchief\b|\bcio\b|\bcto\b|\bceo\b|\bcfo\b|\bciso\b|\bcpo\b|\bcso\b|\bcoo\b|\bchro\b|\bpresident\b", t): return "C Suite", "c-level"
             if re.search(r"\bvice president\b|\bvp\b|\bsvp\b", t): return "VP", "vp"
@@ -177,7 +172,7 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
             df_out["Parsed_Seniority"] = None
             df_out["Seniority_Logic"] = "jobtitle column not found"
 
-        # Company ↔ domain validation
+        # company ↔ domain validation
         progress(0.6, desc="🌐 Validating company ↔ domain...")
         company_cols = [c for c in df_master.columns if c.strip().lower() in ["companyname","company","company name","company_name"]]
         domain_cols = [c for c in df_master.columns if c.strip().lower() in ["website","domain","email domain","email_domain"]]
@@ -209,17 +204,16 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
             df_out["Domain_Check_Score"] = None
             df_out["Domain_Check_Reason"] = None
 
+        # save + format
         progress(0.9, desc="💾 Saving results...")
-        base_name = os.path.splitext(os.path.basename(master_file))[0]
-        out_file = f"{base_name} - Full_Check_Results.xlsx"
+        out_file = f"{os.path.splitext(master_file.name)[0]} - Full_Check_Results.xlsx"
         df_out.to_excel(out_file, index=False)
-
         wb = load_workbook(out_file)
         ws = wb.active
-        yellow = PatternFill("solid", fgColor="FFFF00")
-        green = PatternFill("solid", fgColor="C6EFCE")
-        red = PatternFill("solid", fgColor="FFC7CE")
-        blue = PatternFill("solid", fgColor="ADD8E6")
+        yellow = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+        green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        blue = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
 
         for col_idx, col in enumerate(df_out.columns, start=1):
             if col.startswith("Match_"):
@@ -233,6 +227,7 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
                         ws.cell(row=row, column=col_idx).fill = yellow
 
         if highlight_changes:
+            # corrected_cells contains (column_name, excel_row_index)
             for col_name, row in corrected_cells:
                 if col_name in df_out.columns:
                     col_idx = list(df_out.columns).index(col_name) + 1
@@ -245,13 +240,12 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
-# ------------------ Gradio UI ------------------
-
+# ---------- Gradio UI ----------
 demo = gr.Interface(
     fn=run_matching,
     inputs=[
-        gr.File(label="Upload MASTER Excel file (.xlsx)", file_count="single", type="filepath", file_types=[".xlsx"]),
-        gr.File(label="Upload PICKLIST Excel file (.xlsx)", file_count="single", type="filepath", file_types=[".xlsx"]),
+        gr.File(label="Upload MASTER Excel file (.xlsx)"),
+        gr.File(label="Upload PICKLIST Excel file (.xlsx)"),
         gr.Checkbox(label="Highlight changed values (blue)", value=True),
     ],
     outputs=gr.File(label="Download Processed File"),
@@ -260,21 +254,17 @@ demo = gr.Interface(
     allow_flagging="never",
 )
 
-# ------------------ FastAPI wrapper ------------------
-
+# ---------- FastAPI wrapper ----------
 app = FastAPI()
-
-@app.get("/healthz")
-def health():
-    return JSONResponse({"status": "ok"})
 
 @app.get("/")
 def root():
-    return RedirectResponse(url="/")
+    # Single clean redirect (prevents loops)
+    return RedirectResponse(url="/gradio", status_code=307)
 
-# ✅ mount Gradio directly at root (fixes 404)
-app = gr.mount_gradio_app(app, demo, path="/")
+# mount Gradio at a subpath to avoid collisions with /
+app = gr.mount_gradio_app(app, demo, path="/gradio")
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "7860"))
+    port = int(os.environ.get("PORT", "8080"))
     uvicorn.run("app:app", host="0.0.0.0", port=port, log_level="info")
