@@ -1,8 +1,19 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.DS_Store
-.env
-.venv
+*.pkl
+*.log
+
+# Virtual envs
+.venv/
+env/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs
 *.xlsx
