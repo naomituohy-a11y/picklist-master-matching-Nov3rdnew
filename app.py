@@ -5,7 +5,7 @@ from rapidfuzz import fuzz
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 import gradio as gr
 import uvicorn
 
@@ -211,6 +211,7 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
         progress(0.9, desc="💾 Saving results...")
         out_file = f"{os.path.splitext(master_file.name)[0]} - Full_Check_Results.xlsx"
         df_out.to_excel(out_file, index=False)
+        from openpyxl import load_workbook
         wb = load_workbook(out_file)
         ws = wb.active
         yellow = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
@@ -260,15 +261,17 @@ demo = gr.Interface(
 
 app = FastAPI()
 
-@app.get("/health")
-def health():
+@app.get("/healthz")
+def healthz():
     return JSONResponse({"status": "ok"})
 
 @app.get("/")
 def root():
-    return PlainTextResponse("✅ Service is running. Visit / for the UI once Gradio loads.")
+    # redirect root to the Gradio UI
+    return RedirectResponse(url="/ui")
 
-app = gr.mount_gradio_app(app, demo, path="/")
+# mount Gradio at /ui to avoid clashing with "/"
+app = gr.mount_gradio_app(app, demo, path="/ui")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "7860"))
