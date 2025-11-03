@@ -69,23 +69,19 @@ def compare_company_domain(company: str, domain: str):
     d_raw = domain.lower().strip()
     d = _clean_domain(d_raw)
 
-    # direct containment (handles things like "acmeinc" vs "acme")
     if d in c.replace(" ", "") or c.replace(" ", "") in d:
         return "Likely Match", 100, "direct containment"
 
-    # token containment
     if any(word in c for word in d.split()) or any(word in d for word in c.split()):
         score = fuzz.partial_ratio(c, d)
         if score >= 70:
             return "Likely Match", score, "token containment"
 
-    # brand-ish suffix bias
     BRAND_TERMS = {"tx","bio","pharma","therapeutics","labs","health","med","rx","group","holdings"}
     if any(t in c.split() for t in BRAND_TERMS) and any(t in d for t in BRAND_TERMS):
         if fuzz.partial_ratio(c, d) >= 70:
             return "Likely Match", 90, "brand suffix match"
 
-    # general fuzzy
     score_full = fuzz.token_sort_ratio(c, d)
     score_partial = fuzz.partial_ratio(c, d)
     score = max(score_full, score_partial)
@@ -97,8 +93,7 @@ def compare_company_domain(company: str, domain: str):
     else:
         return "Likely NOT Match", score, "low similarity"
 
-# ------------------ main matching function ------------------
-# NOTE: File inputs use type="filepath", so master_file and picklist_file are string paths.
+# ------------------ main matching ------------------
 
 def run_matching(master_file: str, picklist_file: str, highlight_changes=True, progress=gr.Progress(track_tqdm=True)):
     try:
@@ -125,7 +120,6 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
                 matches, new_vals = [], []
                 for i, val in enumerate(df_master[master_col].fillna("").astype(str)):
                     val_norm = val.strip().lower()
-                    # normalise countries if it's a country-like column
                     if master_col.lower() in ["lead_country","country","c_country"]:
                         val_norm = COUNTRY_EQUIVALENTS.get(val_norm, val_norm)
                     if val_norm in pick_map:
@@ -133,7 +127,7 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
                         new_val = pick_map[val_norm]
                         new_vals.append(new_val)
                         if new_val != val:
-                            corrected_cells.add((master_col, i + 2))  # +2 for header and 1-indexing in Excel
+                            corrected_cells.add((master_col, i + 2))
                     else:
                         matches.append("No")
                         new_vals.append(val)
@@ -142,7 +136,7 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
             else:
                 df_out[out_col] = "Column Missing"
 
-        # dynamic question columns (Q1, Q2, Question 3, etc.)
+        # Dynamic question columns
         q_cols = [c for c in df_picklist.columns if re.match(r"(?i)q0*\d+|question\s*\d+", c)]
         for qc in q_cols:
             out_col = f"Match_{qc}"
@@ -161,7 +155,7 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
             else:
                 df_out[out_col] = "Column Missing"
 
-        # seniority parsing
+        # Seniority parsing
         def parse_seniority(title):
             if not isinstance(title, str): 
                 return "Entry", "no title"
@@ -183,7 +177,7 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
             df_out["Parsed_Seniority"] = None
             df_out["Seniority_Logic"] = "jobtitle column not found"
 
-        # company ↔ domain validation
+        # Company ↔ domain validation
         progress(0.6, desc="🌐 Validating company ↔ domain...")
         company_cols = [c for c in df_master.columns if c.strip().lower() in ["companyname","company","company name","company_name"]]
         domain_cols = [c for c in df_master.columns if c.strip().lower() in ["website","domain","email domain","email_domain"]]
@@ -215,18 +209,17 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
             df_out["Domain_Check_Score"] = None
             df_out["Domain_Check_Reason"] = None
 
-        # save + format
         progress(0.9, desc="💾 Saving results...")
         base_name = os.path.splitext(os.path.basename(master_file))[0]
         out_file = f"{base_name} - Full_Check_Results.xlsx"
         df_out.to_excel(out_file, index=False)
+
         wb = load_workbook(out_file)
         ws = wb.active
-
-        yellow = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        green  = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-        red    = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-        blue   = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
+        yellow = PatternFill("solid", fgColor="FFFF00")
+        green = PatternFill("solid", fgColor="C6EFCE")
+        red = PatternFill("solid", fgColor="FFC7CE")
+        blue = PatternFill("solid", fgColor="ADD8E6")
 
         for col_idx, col in enumerate(df_out.columns, start=1):
             if col.startswith("Match_"):
@@ -257,20 +250,13 @@ def run_matching(master_file: str, picklist_file: str, highlight_changes=True, p
 demo = gr.Interface(
     fn=run_matching,
     inputs=[
-        gr.File(label="Upload MASTER Excel file (.xlsx)",
-                file_count="single",
-                type="filepath",
-                file_types=[".xlsx"]),
-        gr.File(label="Upload PICKLIST Excel file (.xlsx)",
-                file_count="single",
-                type="filepath",
-                file_types=[".xlsx"]),
+        gr.File(label="Upload MASTER Excel file (.xlsx)", file_count="single", type="filepath", file_types=[".xlsx"]),
+        gr.File(label="Upload PICKLIST Excel file (.xlsx)", file_count="single", type="filepath", file_types=[".xlsx"]),
         gr.Checkbox(label="Highlight changed values (blue)", value=True),
     ],
     outputs=gr.File(label="Download Processed File"),
     title="📊 Master–Picklist + Domain Matching Tool",
-    description=("Upload MASTER & PICKLIST Excel files to auto-match, validate domains, map questions, "
-                 "and optionally highlight changed values."),
+    description="Upload MASTER & PICKLIST Excel files to auto-match, validate domains, map questions, and optionally highlight changed values.",
     allow_flagging="never",
 )
 
@@ -284,11 +270,10 @@ def health():
 
 @app.get("/")
 def root():
-    # redirect nicely to the UI
-    return RedirectResponse(url="/gradio")
+    return RedirectResponse(url="/")
 
-# mount Gradio at /gradio (safer for static bundle/cache issues)
-app = gr.mount_gradio_app(app, demo, path="/gradio")
+# ✅ mount Gradio directly at root (fixes 404)
+app = gr.mount_gradio_app(app, demo, path="/")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "7860"))
