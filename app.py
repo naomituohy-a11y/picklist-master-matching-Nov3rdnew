@@ -5,13 +5,11 @@ from rapidfuzz import fuzz
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 import gradio as gr
 import uvicorn
 
-# ============================================================
-# 🧩 Setup – Normalization helpers and constants
-# ============================================================
+# ------------------ constants ------------------
 
 SUFFIXES = {
     "ltd","limited","co","company","corp","corporation","inc","incorporated",
@@ -36,9 +34,7 @@ COUNTRY_EQUIVALENTS = {
 
 THRESHOLD = 70
 
-# ============================================================
-# 🧹 Text cleaning helpers
-# ============================================================
+# ------------------ helpers ------------------
 
 def _normalize_tokens(text: str) -> str:
     if not isinstance(text, str):
@@ -65,10 +61,6 @@ def _extract_domain_from_email(email: str) -> str:
     domain = re.sub(r"/.*$", "", domain)
     return domain
 
-# ============================================================
-# 🌐 Company ↔ Domain Comparison (rule-based + fuzzy)
-# ============================================================
-
 def compare_company_domain(company: str, domain: str):
     if not isinstance(company, str) or not isinstance(domain, str):
         return "Unsure – Please Check", 0, "missing input"
@@ -77,23 +69,19 @@ def compare_company_domain(company: str, domain: str):
     d_raw = domain.lower().strip()
     d = _clean_domain(d_raw)
 
-    # ✅ Direct containment allowing abbreviations
     if d in c.replace(" ", "") or c.replace(" ", "") in d:
         return "Likely Match", 100, "direct containment"
 
-    # ✅ Token-based containment + partial fuzz
     if any(word in c for word in d.split()) or any(word in d for word in c.split()):
         score = fuzz.partial_ratio(c, d)
         if score >= 70:
             return "Likely Match", score, "token containment"
 
-    # ✅ Brand-y suffix alignment (generic)
     BRAND_TERMS = {"tx","bio","pharma","therapeutics","labs","health","med","rx","group","holdings"}
     if any(t in c.split() for t in BRAND_TERMS) and any(t in d for t in BRAND_TERMS):
         if fuzz.partial_ratio(c, d) >= 70:
             return "Likely Match", 90, "brand suffix match"
 
-    # ✅ Fuzzy score logic
     score_full = fuzz.token_sort_ratio(c, d)
     score_partial = fuzz.partial_ratio(c, d)
     score = max(score_full, score_partial)
@@ -105,9 +93,7 @@ def compare_company_domain(company: str, domain: str):
     else:
         return "Likely NOT Match", score, "low similarity"
 
-# ============================================================
-# 🧮 Main Matching Function
-# ============================================================
+# ------------------ main matching function ------------------
 
 def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr.Progress(track_tqdm=True)):
     try:
@@ -149,7 +135,7 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
             else:
                 df_out[out_col] = "Column Missing"
 
-        # ---- Dynamic Question Columns ----
+        # dynamic question columns
         q_cols = [c for c in df_picklist.columns if re.match(r"(?i)q0*\d+|question\s*\d+", c)]
         for qc in q_cols:
             out_col = f"Match_{qc}"
@@ -168,7 +154,7 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
             else:
                 df_out[out_col] = "Column Missing"
 
-        # ---- Seniority parsing ----
+        # seniority parsing
         def parse_seniority(title):
             if not isinstance(title, str): return "Entry", "no title"
             t = title.lower().strip()
@@ -189,7 +175,7 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
             df_out["Parsed_Seniority"] = None
             df_out["Seniority_Logic"] = "jobtitle column not found"
 
-        # ---- Domain vs Company ----
+        # company ↔ domain validation
         progress(0.6, desc="🌐 Validating company ↔ domain...")
         company_cols = [c for c in df_master.columns if c.strip().lower() in ["companyname","company","company name","company_name"]]
         domain_cols = [c for c in df_master.columns if c.strip().lower() in ["website","domain","email domain","email_domain"]]
@@ -221,7 +207,7 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
             df_out["Domain_Check_Score"] = None
             df_out["Domain_Check_Reason"] = None
 
-        # ---- Save + Formatting ----
+        # save + format
         progress(0.9, desc="💾 Saving results...")
         out_file = f"{os.path.splitext(master_file.name)[0]} - Full_Check_Results.xlsx"
         df_out.to_excel(out_file, index=False)
@@ -256,27 +242,21 @@ def run_matching(master_file, picklist_file, highlight_changes=True, progress=gr
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
-# ============================================================
-# 🎛️ Gradio Interface (make sure this exists as `demo`)
-# ============================================================
+# ------------------ Gradio UI ------------------
 
 demo = gr.Interface(
     fn=run_matching,
     inputs=[
         gr.File(label="Upload MASTER Excel file (.xlsx)"),
         gr.File(label="Upload PICKLIST Excel file (.xlsx)"),
-        gr.Checkbox(label="Highlight changed values (blue)", value=True)
+        gr.Checkbox(label="Highlight changed values (blue)", value=True),
     ],
     outputs=gr.File(label="Download Processed File"),
     title="📊 Master–Picklist + Domain Matching Tool",
     description="Upload MASTER & PICKLIST Excel files to auto-match, validate domains, map questions, and optionally highlight changed values.",
-    # CRITICAL: disable schema exposure to avoid JSON-schema crash in some Gradio versions
-    show_api=False
 )
 
-# ============================================================
-# 🚀 FastAPI wrapper + mount
-# ============================================================
+# ------------------ FastAPI wrapper ------------------
 
 app = FastAPI()
 
@@ -284,12 +264,11 @@ app = FastAPI()
 def health():
     return JSONResponse({"status": "ok"})
 
-# Mount Gradio app at root
-app = gr.mount_gradio_app(app, demo, path="/")
+@app.get("/")
+def root():
+    return PlainTextResponse("✅ Service is running. Visit / for the UI once Gradio loads.")
 
-# ============================================================
-# 🏁 Launch
-# ============================================================
+app = gr.mount_gradio_app(app, demo, path="/")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "7860"))
