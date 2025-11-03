@@ -1,11 +1,7 @@
 pandas==2.3.3
 openpyxl==3.1.5
 rapidfuzz==3.14.1
-
-# Gradio + compatible hub
-gradio==4.43.0
-huggingface_hub==0.14.1
-
-# ASGI
+gradio==4.33.0
+huggingface_hub==0.19.4
 fastapi==0.112.4
 uvicorn==0.38.0
