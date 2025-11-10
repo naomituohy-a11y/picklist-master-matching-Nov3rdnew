@@ -3,6 +3,6 @@ openpyxl==3.1.5
 rapidfuzz==3.14.1
 fastapi==0.112.4
 uvicorn==0.38.0
-gradio==4.43.0
+gradio==4.44.1
 huggingface_hub==0.19.4
 python-multipart==0.0.20
